@@ -1,11 +1,10 @@
-use crate::ast::{Expression, Dice, Set};
 use crate::{
-    ast::{DiceOp, Expr, SetOp, SetSelector},
+    ast::{Dice, DiceOp, Expr, Expression, Set, SetOp, SetSelector},
     lex::{lexer, Lexer, TokenKind},
 };
 use logos_iter::LogosIter;
 
-type PResult<T = Expr> = Result<T, ParseError>;
+type PResult<'a, T = Expr<'a>> = Result<T, ParseError>;
 
 #[derive(Debug, PartialEq)]
 pub(crate) struct ParseError {
@@ -73,11 +72,11 @@ impl<'a> Parser<'a> {
         Self { lexer: lexer(s) }
     }
 
-    pub fn parse(mut self) -> Result<Expr, ParseError> {
+    pub fn parse(mut self) -> Result<Expr<'a>, ParseError> {
         self.parse_expression()
     }
 
-    pub fn parse_commented(mut self) -> Result<Expression, ParseError> {
+    pub fn parse_commented(mut self) -> Result<Expression<'a>, ParseError> {
         self.parse_commented_expression()
     }
 
@@ -112,15 +111,6 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn consume_any(&mut self, options: &[TokenKind]) -> PResult<()> {
-        if self.matches_any(options) {
-            self.lexer.next();
-            Ok(())
-        } else {
-            self.unexpected_token(options.to_vec())
-        }
-    }
-
     fn consume_as<T: std::str::FromStr>(
         &mut self,
         expected: TokenKind,
@@ -142,24 +132,24 @@ impl<'a> Parser<'a> {
         self.error(ParseErrorKind::UnexpectedToken { found, expected })
     }
 
-    fn parse_commented_expression(&mut self) -> PResult<Expression> {
+    fn parse_commented_expression(&mut self) -> PResult<'a, Expression<'a>> {
         let expr = self.parse_expression()?;
 
         let comment = self.lexer.remainder().trim();
         let comment = if comment.is_empty() {
             None
         } else {
-            Some(comment.to_string())
+            Some(comment)
         };
 
         Ok(Expression { expr, comment })
     }
 
-    fn parse_expression(&mut self) -> PResult {
+    fn parse_expression(&mut self) -> PResult<'a> {
         self.parse_comparison()
     }
 
-    fn parse_comparison(&mut self) -> PResult {
+    fn parse_comparison(&mut self) -> PResult<'a> {
         let mut lhs = self.parse_addition()?;
 
         while self.matches_any(Self::COMPARISON_OPS) {
@@ -172,7 +162,7 @@ impl<'a> Parser<'a> {
         Ok(lhs)
     }
 
-    fn parse_addition(&mut self) -> PResult {
+    fn parse_addition(&mut self) -> PResult<'a> {
         let mut lhs = self.parse_multiplication()?;
 
         while self.matches_any(Self::ADDITION_OPS) {
@@ -185,7 +175,7 @@ impl<'a> Parser<'a> {
         Ok(lhs)
     }
 
-    fn parse_multiplication(&mut self) -> PResult {
+    fn parse_multiplication(&mut self) -> PResult<'a> {
         let mut lhs = self.parse_unary_prefix()?;
 
         while self.matches_any(Self::MULTIPLICATION_OPS) {
@@ -198,7 +188,7 @@ impl<'a> Parser<'a> {
         Ok(lhs)
     }
 
-    fn parse_unary_prefix(&mut self) -> PResult {
+    fn parse_unary_prefix(&mut self) -> PResult<'a> {
         if self.matches_any(Self::UNARY_PREFIX_OPS) {
             let op = self.advance_as().unwrap();
             let rhs = self.parse_unary_prefix()?;
@@ -209,7 +199,7 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn parse_atom(&mut self) -> PResult {
+    fn parse_atom(&mut self) -> PResult<'a> {
         let atom = match self.lexer.peek() {
             Some(TokenKind::LeftParen) => self.parse_set_or_parens(),
             Some(TokenKind::Decimal) => self.parse_decimal(),
@@ -234,13 +224,13 @@ impl<'a> Parser<'a> {
         })
     }
 
-    fn parse_annotation(&mut self) -> PResult<String> {
+    fn parse_annotation(&mut self) -> PResult<&'a str> {
         self.consume(TokenKind::Annotation)?;
         let slice = self.lexer.slice();
-        Ok(slice[1..slice.len() - 1].to_string())
+        Ok(&slice[1..slice.len() - 1])
     }
 
-    fn parse_set_or_parens(&mut self) -> PResult {
+    fn parse_set_or_parens(&mut self) -> PResult<'a> {
         self.consume(TokenKind::LeftParen)?;
 
         if self.matches(TokenKind::RightParen) {
@@ -256,7 +246,7 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn parse_set(&mut self, first_item: Option<Expr>) -> PResult {
+    fn parse_set(&mut self, first_item: Option<Expr<'a>>) -> PResult<'a> {
         let mut items: Vec<_> = first_item.into_iter().collect();
         while self.matches(TokenKind::Comma) {
             self.advance();
@@ -271,17 +261,17 @@ impl<'a> Parser<'a> {
         Ok(Expr::Set(Set { items, ops }))
     }
 
-    fn parse_decimal(&mut self) -> PResult {
+    fn parse_decimal(&mut self) -> PResult<'a> {
         let x = self.consume_as::<f64>(TokenKind::Decimal)?.unwrap();
         Ok(Expr::Decimal(x))
     }
 
-    fn parse_integer(&mut self) -> PResult {
+    fn parse_integer(&mut self) -> PResult<'a> {
         self.consume_as(TokenKind::Integer)
             .map(|x| Expr::Integer(x.unwrap()))
     }
 
-    fn parse_dice(&mut self) -> PResult {
+    fn parse_dice(&mut self) -> PResult<'a> {
         let mut dice = self.consume_as::<Dice>(TokenKind::Dice)?.unwrap();
         let ops = self.parse_dice_ops()?;
         dice.ops = ops;
@@ -389,7 +379,7 @@ mod tests {
         };
     }
 
-    fn parse(s: &str) -> PResult {
+    fn parse(s: &str) -> PResult<'_> {
         Parser::new(s).parse()
     }
 
@@ -520,13 +510,13 @@ mod tests {
     fn test_parse_annotations() {
         check(
             "1d20 [d20]",
-            Expr::Annotated(Box::new(dice!(1, 20)), vec!["d20".to_string()]),
+            Expr::Annotated(Box::new(dice!(1, 20)), vec!["d20"]),
         );
         check(
             "2d20kh1 [Adv.] [d20]",
             Expr::Annotated(
                 Box::new(dice!(2, 20; DiceOp::Keep(SetSelector::Highest(1)))),
-                vec!["Adv.".to_string(), "d20".to_string()],
+                vec!["Adv.", "d20"],
             ),
         );
     }
@@ -540,16 +530,10 @@ mod tests {
             Expression {
                 expr: Expr::Binary(
                     BinaryOp::Add,
-                    Box::new(Expr::Annotated(
-                        Box::new(dice!(2, 6)),
-                        vec!["piercing".to_string()],
-                    )),
-                    Box::new(Expr::Annotated(
-                        Box::new(dice!(1, 10)),
-                        vec!["cold".to_string()],
-                    )),
+                    Box::new(Expr::Annotated(Box::new(dice!(2, 6)), vec!["piercing"],)),
+                    Box::new(Expr::Annotated(Box::new(dice!(1, 10)), vec!["cold"],)),
                 ),
-                comment: Some("Ice Knife".to_string()),
+                comment: Some("Ice Knife"),
             }
         );
 
@@ -561,14 +545,8 @@ mod tests {
             Expression {
                 expr: Expr::Binary(
                     BinaryOp::Add,
-                    Box::new(Expr::Annotated(
-                        Box::new(dice!(2, 6)),
-                        vec!["piercing".to_string()],
-                    )),
-                    Box::new(Expr::Annotated(
-                        Box::new(dice!(1, 10)),
-                        vec!["cold".to_string()],
-                    )),
+                    Box::new(Expr::Annotated(Box::new(dice!(2, 6)), vec!["piercing"],)),
+                    Box::new(Expr::Annotated(Box::new(dice!(1, 10)), vec!["cold"],)),
                 ),
                 comment: None,
             }

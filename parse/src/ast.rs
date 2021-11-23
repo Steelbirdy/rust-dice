@@ -6,18 +6,18 @@ pub(crate) type Int = i64;
 pub(crate) type Dec = f64;
 
 #[derive(Debug, Clone, PartialEq)]
-pub(crate) struct Expression {
-    pub expr: Expr,
-    pub comment: Option<String>,
+pub(crate) struct Expression<'a> {
+    pub expr: Expr<'a>,
+    pub comment: Option<&'a str>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub(crate) enum Expr {
-    Binary(BinaryOp, Box<Expr>, Box<Expr>),
-    Unary(UnaryOp, Box<Expr>),
-    Grouping(Box<Expr>),
-    Annotated(Box<Expr>, Vec<String>),
-    Set(Set),
+pub(crate) enum Expr<'a> {
+    Binary(BinaryOp, Box<Expr<'a>>, Box<Expr<'a>>),
+    Unary(UnaryOp, Box<Expr<'a>>),
+    Grouping(Box<Expr<'a>>),
+    Annotated(Box<Expr<'a>>, Vec<&'a str>),
+    Set(Set<'a>),
     Integer(Int),
     Decimal(Dec),
     Dice(Dice),
@@ -31,8 +31,8 @@ pub(crate) struct Dice {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub(crate) struct Set {
-    pub(crate) items: Vec<Expr>,
+pub(crate) struct Set<'a> {
+    pub(crate) items: Vec<Expr<'a>>,
     pub(crate) ops: Vec<SetOp>,
 }
 
