@@ -1,0 +1,13 @@
+[package]
+name = "rust-dice"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+enum_dispatch = "^0.3.7"
+lazy_static = "^1.4.0"
+rand = "^0.8.4"
+rand_pcg = "^0.3.1"
+thiserror = "^1.0.30"
