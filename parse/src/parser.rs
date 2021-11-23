@@ -1,29 +1,86 @@
+use crate::ast::{Float, Int, SetOperatorKind};
 use crate::{
-    ast::{Dice, DiceOp, Expr, Expression, Set, SetOp, SetSelector},
-    lex::{lexer, Lexer, TokenKind},
+    ast::{Dice, Expression, Node, Set, SetOperator, SetSelector},
+    lexer::{lexer, Lexer, TokenKind},
 };
 use logos_iter::LogosIter;
+use std::fmt;
+use std::ops::Range;
 
-type PResult<'a, T = Expr<'a>> = Result<T, ParseError>;
+type PResult<'a, T = Node<'a>> = Result<T, ParseError>;
 
-#[derive(Debug, PartialEq)]
-pub(crate) struct ParseError {
-    kind: ParseErrorKind,
-    span: logos::Span,
-    slice: String,
+#[derive(thiserror::Error, Debug, PartialEq)]
+#[error("error at position {} ({slice:?}): {kind}", .span.start)]
+pub struct ParseError {
+    pub kind: ParseErrorKind,
+    pub span: Range<usize>,
+    pub slice: String,
 }
 
 #[derive(Debug, PartialEq)]
-pub(crate) enum ParseErrorKind {
+pub enum ParseErrorKind {
     UnexpectedToken {
         found: Option<TokenKind>,
         expected: Vec<TokenKind>,
     },
+    UnexpectedString {
+        expected: Vec<TokenKind>,
+    },
+    LexError(TokenKind),
     InvalidMinMaxSelector(SetSelector),
+    InvalidSetOp(SetOperatorKind),
 }
 
-// TODO: Generic over int, decimal, and dice size types?
-pub(crate) struct Parser<'a> {
+impl fmt::Display for ParseErrorKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::UnexpectedToken { found, expected } => {
+                write!(f, "unexpected token: found {:?}, expected ", found)?;
+                fmt_expected(expected, f)
+            }
+            Self::UnexpectedString { expected } => {
+                write!(f, "expected ")?;
+                fmt_expected(expected, f)
+            }
+            Self::LexError(TokenKind::ErrBadDice) => {
+                write!(f, "invalid dice literal")
+            }
+            Self::LexError(TokenKind::ErrEmptyAnnotation) => {
+                write!(f, "annotations cannot be empty")
+            }
+            Self::InvalidMinMaxSelector(sel) => {
+                write!(
+                    f,
+                    "{} cannot be used for set operator 'mi' or 'ma'; only a number is allowed",
+                    sel
+                )
+            }
+            Self::InvalidSetOp(kind) => {
+                write!(f, "{} can only be used with dice", kind)
+            }
+            _ => unreachable!(),
+        }
+    }
+}
+
+fn fmt_expected(expected: &[TokenKind], f: &mut fmt::Formatter<'_>) -> fmt::Result {
+    let len = expected.len();
+
+    if expected.is_empty() {
+        Ok(())
+    } else if len == 1 {
+        f.write_str(expected[0].to_str())
+    } else if len == 2 {
+        write!(f, "{} or {}", expected[0].to_str(), expected[1].to_str())
+    } else {
+        for exp in &expected[..len - 1] {
+            write!(f, "{}, ", exp.to_str())?;
+        }
+        write!(f, "and {}", expected[len - 1].to_str())
+    }
+}
+
+pub struct Parser<'a> {
     lexer: Lexer<'a>,
 }
 
@@ -72,12 +129,8 @@ impl<'a> Parser<'a> {
         Self { lexer: lexer(s) }
     }
 
-    pub fn parse(mut self) -> Result<Expr<'a>, ParseError> {
+    pub fn parse(mut self) -> Result<Expression<'a>, ParseError> {
         self.parse_expression()
-    }
-
-    pub fn parse_commented(mut self) -> Result<Expression<'a>, ParseError> {
-        self.parse_commented_expression()
     }
 
     fn advance(&mut self) -> Option<TokenKind> {
@@ -129,23 +182,30 @@ impl<'a> Parser<'a> {
 
     fn unexpected_token<T>(&mut self, expected: Vec<TokenKind>) -> PResult<T> {
         let found = self.lexer.next();
-        self.error(ParseErrorKind::UnexpectedToken { found, expected })
+        if matches!(
+            found,
+            Some(TokenKind::ErrBadDice | TokenKind::ErrEmptyAnnotation)
+        ) {
+            self.error(ParseErrorKind::LexError(found.unwrap()))
+        } else if matches!(found, Some(TokenKind::Error)) {
+            self.error(ParseErrorKind::UnexpectedString { expected })
+        } else {
+            self.error(ParseErrorKind::UnexpectedToken { found, expected })
+        }
     }
 
-    fn parse_commented_expression(&mut self) -> PResult<'a, Expression<'a>> {
-        let expr = self.parse_expression()?;
+    fn parse_expression(&mut self) -> PResult<'a, Expression<'a>> {
+        let roll = self.parse_node()?;
 
         let comment = self.lexer.remainder().trim();
-        let comment = if comment.is_empty() {
-            None
+        Ok(if comment.is_empty() {
+            Expression::new(roll)
         } else {
-            Some(comment)
-        };
-
-        Ok(Expression { expr, comment })
+            Expression::new_commented(roll, comment)
+        })
     }
 
-    fn parse_expression(&mut self) -> PResult<'a> {
+    fn parse_node(&mut self) -> PResult<'a> {
         self.parse_comparison()
     }
 
@@ -156,7 +216,7 @@ impl<'a> Parser<'a> {
             let op = self.advance_as().unwrap();
             let rhs = self.parse_comparison()?;
 
-            lhs = Expr::Binary(op, Box::new(lhs), Box::new(rhs))
+            lhs = Node::binary(op, lhs, rhs)
         }
 
         Ok(lhs)
@@ -169,7 +229,7 @@ impl<'a> Parser<'a> {
             let op = self.advance_as().unwrap();
             let rhs = self.parse_addition()?;
 
-            lhs = Expr::Binary(op, Box::new(lhs), Box::new(rhs));
+            lhs = Node::binary(op, lhs, rhs);
         }
 
         Ok(lhs)
@@ -182,7 +242,7 @@ impl<'a> Parser<'a> {
             let op = self.advance_as().unwrap();
             let rhs = self.parse_multiplication()?;
 
-            lhs = Expr::Binary(op, Box::new(lhs), Box::new(rhs));
+            lhs = Node::binary(op, lhs, rhs);
         }
 
         Ok(lhs)
@@ -193,7 +253,7 @@ impl<'a> Parser<'a> {
             let op = self.advance_as().unwrap();
             let rhs = self.parse_unary_prefix()?;
 
-            Ok(Expr::Unary(op, Box::new(rhs)))
+            Ok(Node::unary(op, rhs))
         } else {
             self.parse_atom()
         }
@@ -220,7 +280,7 @@ impl<'a> Parser<'a> {
         Ok(if annotations.is_empty() {
             atom
         } else {
-            Expr::Annotated(Box::new(atom), annotations)
+            Node::annotated(atom, annotations)
         })
     }
 
@@ -236,67 +296,73 @@ impl<'a> Parser<'a> {
         if self.matches(TokenKind::RightParen) {
             self.parse_set(None)
         } else {
-            let first_item = self.parse_expression()?;
+            let first_item = self.parse_node()?;
             if self.matches(TokenKind::Comma) {
                 self.parse_set(Some(first_item))
             } else {
                 self.consume(TokenKind::RightParen)?;
-                Ok(Expr::Grouping(Box::new(first_item)))
+                Ok(Node::parenthetical(first_item))
             }
         }
     }
 
-    fn parse_set(&mut self, first_item: Option<Expr<'a>>) -> PResult<'a> {
+    fn parse_set(&mut self, first_item: Option<Node<'a>>) -> PResult<'a> {
         let mut items: Vec<_> = first_item.into_iter().collect();
         while self.matches(TokenKind::Comma) {
             self.advance();
             if self.matches(TokenKind::RightParen) {
                 break;
             }
-            items.push(self.parse_expression()?);
+            items.push(self.parse_node()?);
         }
         self.consume(TokenKind::RightParen)?;
 
         let ops = self.parse_set_ops()?;
-        Ok(Expr::Set(Set { items, ops }))
+        Ok(Node::set(Set::NumberSet(items), ops))
     }
 
     fn parse_decimal(&mut self) -> PResult<'a> {
-        let x = self.consume_as::<f64>(TokenKind::Decimal)?.unwrap();
-        Ok(Expr::Decimal(x))
+        let x = self.consume_as::<Float>(TokenKind::Decimal)?.unwrap();
+        Ok(Node::literal(x))
     }
 
     fn parse_integer(&mut self) -> PResult<'a> {
-        self.consume_as(TokenKind::Integer)
-            .map(|x| Expr::Integer(x.unwrap()))
+        self.consume_as::<Int>(TokenKind::Integer)
+            .map(|x| Node::literal(x.unwrap()))
     }
 
     fn parse_dice(&mut self) -> PResult<'a> {
-        let mut dice = self.consume_as::<Dice>(TokenKind::Dice)?.unwrap();
+        let dice = self.consume_as::<Dice>(TokenKind::Dice)?.unwrap();
         let ops = self.parse_dice_ops()?;
-        dice.ops = ops;
-        Ok(Expr::Dice(dice))
+        Ok(Node::set(dice, ops))
     }
 
-    fn parse_set_ops(&mut self) -> PResult<Vec<SetOp>> {
+    fn parse_set_ops(&mut self) -> PResult<Vec<SetOperator>> {
         let mut ops = Vec::new();
         while self.matches_any(Self::SET_OPS) {
             ops.push(self.parse_set_op()?);
         }
+        if self.matches_any(Self::DICE_OPS) {
+            let op = self.parse_dice_op()?;
+            return self.error(ParseErrorKind::InvalidSetOp(op.kind));
+        }
+
         Ok(ops)
     }
 
-    fn parse_set_op(&mut self) -> PResult<SetOp> {
+    fn parse_set_op(&mut self) -> PResult<SetOperator> {
         let op = self.lexer.next().unwrap();
         let sel = self.parse_selector()?;
+
+        use SetOperatorKind::*;
         Ok(match op {
-            TokenKind::SetOpKeep => SetOp::Keep(sel),
-            TokenKind::SetOpDrop => SetOp::Drop(sel),
+            TokenKind::SetOpKeep => SetOperator::new(Keep, Some(sel)),
+            TokenKind::SetOpDrop => SetOperator::new(Drop, Some(sel)),
             _ => unreachable!(),
         })
     }
 
-    fn parse_dice_ops(&mut self) -> PResult<Vec<DiceOp>> {
+    fn parse_dice_ops(&mut self) -> PResult<Vec<SetOperator>> {
         let mut ops = Vec::new();
         while self.matches_any(Self::DICE_OPS) {
             ops.push(self.parse_dice_op()?);
@@ -304,26 +370,28 @@ impl<'a> Parser<'a> {
         Ok(ops)
     }
 
-    fn parse_dice_op(&mut self) -> PResult<DiceOp> {
+    fn parse_dice_op(&mut self) -> PResult<SetOperator> {
         let op = self.lexer.next().unwrap();
         let sel = self.parse_selector()?;
+
+        use SetOperatorKind::*;
         Ok(match op {
-            TokenKind::SetOpKeep => DiceOp::Keep(sel),
-            TokenKind::SetOpDrop => DiceOp::Drop(sel),
-            TokenKind::DiceOpReroll => DiceOp::Reroll(sel),
-            TokenKind::DiceOpRerollOnce => DiceOp::RerollOnce(sel),
-            TokenKind::DiceOpExplode => DiceOp::Explode(sel),
-            TokenKind::DiceOpRerollAdd => DiceOp::ExplodeOnce(sel),
+            TokenKind::SetOpKeep => SetOperator::new(Keep, Some(sel)),
+            TokenKind::SetOpDrop => SetOperator::new(Drop, Some(sel)),
+            TokenKind::DiceOpReroll => SetOperator::new(Reroll, Some(sel)),
+            TokenKind::DiceOpRerollOnce => SetOperator::new(RerollOnce, Some(sel)),
+            TokenKind::DiceOpExplode => SetOperator::new(Explode, Some(sel)),
+            TokenKind::DiceOpRerollAdd => SetOperator::new(ExplodeOnce, Some(sel)),
             TokenKind::DiceOpMinimum => {
-                if let SetSelector::EqualTo(x) = sel {
-                    DiceOp::Minimum(x)
+                if matches!(sel, SetSelector::EqualTo(_)) {
+                    SetOperator::new(Minimum, Some(sel))
                 } else {
                     return self.error(ParseErrorKind::InvalidMinMaxSelector(sel));
                 }
             }
             TokenKind::DiceOpMaximum => {
-                if let SetSelector::EqualTo(x) = sel {
-                    DiceOp::Maximum(x)
+                if matches!(sel, SetSelector::EqualTo(_)) {
+                    SetOperator::new(Maximum, Some(sel))
                 } else {
                     return self.error(ParseErrorKind::InvalidMinMaxSelector(sel));
                 }
@@ -358,41 +426,38 @@ mod tests {
     use super::*;
     use crate::ast::*;
 
-    impl From<UInt> for DiceSize {
-        fn from(x: UInt) -> Self {
+    impl From<Int> for DiceSize {
+        fn from(x: Int) -> Self {
             DiceSize::Int(x)
         }
     }
 
     macro_rules! dice {
-        ($num:literal, $size:literal $(; $($op:expr),+)?) => {
-            Expr::Dice(Dice { num: $num, size: DiceSize::Int($size), ops: vec![$($($op),+)?] })
-        };
         ($num:literal, $size:expr $(; $($op:expr),+)?) => {
-            Expr::Dice(Dice { num: $num, size: $size, ops: vec![$($($op),+)?] })
+            Node::set(Dice::new($num, $size), vec![$($($op),+)?])
         };
     }
 
     macro_rules! set {
         ($($item:expr),* $(,)? $(; $($op:expr),+ $(,)?)?) => {
-            Expr::Set(Set { items: vec![$($item),*], ops: vec![$($($op),+)?] })
+            Node::set(Set::NumberSet(vec![$($item),*]), vec![$($($op),+)?])
         };
     }
 
-    fn parse(s: &str) -> PResult<'_> {
+    fn parse(s: &str) -> PResult<Expression> {
         Parser::new(s).parse()
     }
 
-    fn check(s: &str, expected: Expr) {
+    fn check(s: &str, expected: Node) {
         let parsed = parse(s).unwrap();
-        assert_eq!(parsed, expected);
+        assert_eq!(parsed.roll, expected);
     }
 
     #[test]
     fn test_parse_nums() {
-        check("32", Expr::Integer(32));
-        check("3.2", Expr::Decimal(3.2));
-        check(".67", Expr::Decimal(0.67));
+        check("32", Node::literal(32));
+        check("3.2", Node::literal(3.2));
+        check(".67", Node::literal(0.67));
     }
 
     #[test]
@@ -402,14 +467,14 @@ mod tests {
         check("2d%", dice!(2, DiceSize::Percentile));
         check(
             "2d20kh1",
-            dice!(2, 20; DiceOp::Keep(SetSelector::Highest(1))),
+            dice!(2, 20; SetOperator::new(SetOperatorKind::Keep, Some(SetSelector::Highest(1)))),
         );
         check(
             "10d4rol2mi5e5",
             dice!(10, 4;
-            DiceOp::RerollOnce(SetSelector::Lowest(2)),
-            DiceOp::Minimum(5),
-            DiceOp::Explode(SetSelector::EqualTo(5))),
+            SetOperator::new(SetOperatorKind::RerollOnce, Some(SetSelector::Lowest(2))),
+            SetOperator::new(SetOperatorKind::Minimum, Some(SetSelector::EqualTo(5))),
+            SetOperator::new(SetOperatorKind::Explode, Some(SetSelector::EqualTo(5)))),
         );
     }
 
@@ -417,7 +482,7 @@ mod tests {
     fn test_parse_set() {
         check(
             "(1, 2, 3)",
-            set!(Expr::Integer(1), Expr::Integer(2), Expr::Integer(3)),
+            set!(Node::literal(1), Node::literal(2), Node::literal(3)),
         );
         check(
             "(3d4, 1d12, 2d6)",
@@ -425,35 +490,32 @@ mod tests {
         );
         check(
             "(1d4, 1d4e4)k>2",
-            set!(dice!(1, 4), dice!(1, 4; DiceOp::Explode(SetSelector::EqualTo(4))); SetOp::Keep(SetSelector::GreaterThan(2))),
+            set!(dice!(1, 4), dice!(1, 4; SetOperator::new(SetOperatorKind::Explode, Some(SetSelector::EqualTo(4)))); SetOperator::new(SetOperatorKind::Keep, Some(SetSelector::GreaterThan(2)))),
         );
     }
 
     #[test]
     fn test_parse_unary() {
-        check(
-            "-2",
-            Expr::Unary(UnaryOp::Minus, Box::new(Expr::Integer(2))),
-        );
+        check("-2", Node::unary(UnaryOperator::Minus, Node::literal(2)));
         check(
             "-2.0",
-            Expr::Unary(UnaryOp::Minus, Box::new(Expr::Decimal(2.0))),
+            Node::unary(UnaryOperator::Minus, Node::literal(2.0)),
         );
-        check("-1d20", Expr::Unary(UnaryOp::Minus, Box::new(dice!(1, 20))));
+        check("-1d20", Node::unary(UnaryOperator::Minus, dice!(1, 20)));
         check(
             "- -- - -2d4",
-            Expr::Unary(
-                UnaryOp::Minus,
-                Box::new(Expr::Unary(
-                    UnaryOp::Minus,
-                    Box::new(Expr::Unary(
-                        UnaryOp::Minus,
-                        Box::new(Expr::Unary(
-                            UnaryOp::Minus,
-                            Box::new(Expr::Unary(UnaryOp::Minus, Box::new(dice!(2, 4)))),
-                        )),
-                    )),
-                )),
+            Node::unary(
+                UnaryOperator::Minus,
+                Node::unary(
+                    UnaryOperator::Minus,
+                    Node::unary(
+                        UnaryOperator::Minus,
+                        Node::unary(
+                            UnaryOperator::Minus,
+                            Node::unary(UnaryOperator::Minus, dice!(2, 4)),
+                        ),
+                    ),
+                ),
             ),
         );
     }
@@ -462,60 +524,49 @@ mod tests {
     fn test_parse_binary() {
         check(
             "2 + 2",
-            Expr::Binary(
-                BinaryOp::Add,
-                Box::new(Expr::Integer(2)),
-                Box::new(Expr::Integer(2)),
-            ),
+            Node::binary(BinaryOperator::Add, Node::literal(2), Node::literal(2)),
         );
         check(
             "2.5 // 1",
-            Expr::Binary(
-                BinaryOp::FloorDiv,
-                Box::new(Expr::Decimal(2.5)),
-                Box::new(Expr::Integer(1)),
+            Node::binary(
+                BinaryOperator::FloorDiv,
+                Node::literal(2.5),
+                Node::literal(1),
             ),
         );
         check(
             "1 + 2 * 3",
-            Expr::Binary(
-                BinaryOp::Add,
-                Box::new(Expr::Integer(1)),
-                Box::new(Expr::Binary(
-                    BinaryOp::Mul,
-                    Box::new(Expr::Integer(2)),
-                    Box::new(Expr::Integer(3)),
-                )),
+            Node::binary(
+                BinaryOperator::Add,
+                Node::literal(1),
+                Node::binary(BinaryOperator::Mul, Node::literal(2), Node::literal(3)),
             ),
         );
         check(
             "(3d2 - 2d3) % 2 == 0",
-            Expr::Binary(
-                BinaryOp::Eq,
-                Box::new(Expr::Binary(
-                    BinaryOp::Mod,
-                    Box::new(Expr::Grouping(Box::new(Expr::Binary(
-                        BinaryOp::Sub,
-                        Box::new(dice!(3, 2)),
-                        Box::new(dice!(2, 3)),
-                    )))),
-                    Box::new(Expr::Integer(2)),
-                )),
-                Box::new(Expr::Integer(0)),
+            Node::binary(
+                BinaryOperator::Eq,
+                Node::binary(
+                    BinaryOperator::Mod,
+                    Node::parenthetical(Node::binary(
+                        BinaryOperator::Sub,
+                        dice!(3, 2),
+                        dice!(2, 3),
+                    )),
+                    Node::literal(2),
+                ),
+                Node::literal(0),
             ),
         );
     }
 
     #[test]
     fn test_parse_annotations() {
-        check(
-            "1d20 [d20]",
-            Expr::Annotated(Box::new(dice!(1, 20)), vec!["d20"]),
-        );
+        check("1d20 [d20]", Node::annotated(dice!(1, 20), vec!["d20"]));
         check(
             "2d20kh1 [Adv.] [d20]",
-            Expr::Annotated(
-                Box::new(dice!(2, 20; DiceOp::Keep(SetSelector::Highest(1)))),
+            Node::annotated(
+                dice!(2, 20; SetOperator::new(SetOperatorKind::Keep, Some(SetSelector::Highest(1)))),
                 vec!["Adv.", "d20"],
             ),
         );
@@ -523,33 +574,41 @@ mod tests {
     #[test]
     fn test_parse_commented() {
         let parsed = Parser::new("2d6 [piercing] + 1d10 [cold] Ice Knife")
-            .parse_commented()
+            .parse()
             .unwrap();
         assert_eq!(
             parsed,
             Expression {
-                expr: Expr::Binary(
-                    BinaryOp::Add,
-                    Box::new(Expr::Annotated(Box::new(dice!(2, 6)), vec!["piercing"],)),
-                    Box::new(Expr::Annotated(Box::new(dice!(1, 10)), vec!["cold"],)),
+                roll: Node::binary(
+                    BinaryOperator::Add,
+                    Node::annotated(dice!(2, 6), vec!["piercing"]),
+                    Node::annotated(dice!(1, 10), vec!["cold"]),
                 ),
                 comment: Some("Ice Knife"),
             }
         );
 
         let parsed = Parser::new("2d6 [piercing] + 1d10 [cold] ")
-            .parse_commented()
+            .parse()
             .unwrap();
         assert_eq!(
             parsed,
             Expression {
-                expr: Expr::Binary(
-                    BinaryOp::Add,
-                    Box::new(Expr::Annotated(Box::new(dice!(2, 6)), vec!["piercing"],)),
-                    Box::new(Expr::Annotated(Box::new(dice!(1, 10)), vec!["cold"],)),
+                roll: Node::binary(
+                    BinaryOperator::Add,
+                    Node::annotated(dice!(2, 6), vec!["piercing"]),
+                    Node::annotated(dice!(1, 10), vec!["cold"]),
                 ),
                 comment: None,
             }
+        );
+    }
+
+    #[test]
+    fn test_simplify_ops() {
+        check(
+            "2d20kh1kl1",
+            dice!(2, 20; SetOperator::new(SetOperatorKind::Keep, vec![SetSelector::Highest(1), SetSelector::Lowest(1)])),
         );
     }
 }

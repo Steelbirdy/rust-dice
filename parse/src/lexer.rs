@@ -5,7 +5,7 @@ pub(crate) fn lexer(s: &str) -> Lexer {
 }
 
 #[derive(logos::Logos, Debug, Copy, Clone, Eq, PartialEq)]
-pub(crate) enum TokenKind {
+pub enum TokenKind {
     #[regex(r"[0-9]+")]
     Integer,
     #[regex(r"([0-9]+\.[0-9]*)|(\.[0-9]+)")]
@@ -83,4 +83,43 @@ pub(crate) enum TokenKind {
     #[regex(r"[ \t\r\n]+", logos::skip)]
     #[error]
     Error,
+}
+
+impl TokenKind {
+    pub(crate) fn to_str(self) -> &'static str {
+        use TokenKind::*;
+
+        match self {
+            Integer => "<integer>",
+            Decimal => "<decimal>",
+            Dice => "<dice>",
+            LeftParen => "'('",
+            RightParen => "')'",
+            Comma => "','",
+            Plus => "'+'",
+            Minus => "'-'",
+            Star => "'*'",
+            Slash => "'/'",
+            SlashSlash => "'//'",
+            Percent => "'%'",
+            EqualEqual => "'=='",
+            GreaterEqual => "'>='",
+            LessEqual => "'<='",
+            BangEqual => "'!='",
+            LessThan => "'<'",
+            GreaterThan => "'>'",
+            SetOpKeep => "'k'",
+            SetOpDrop => "'p'",
+            DiceOpReroll => "'rr'",
+            DiceOpRerollOnce => "'ro'",
+            DiceOpExplode => "'e'",
+            DiceOpRerollAdd => "'ra'",
+            DiceOpMinimum => "'mi'",
+            DiceOpMaximum => "'ma'",
+            SelLowest => "'l'",
+            SelHighest => "'h'",
+            Annotation => "<annotation>",
+            _ => "<error>",
+        }
+    }
 }
