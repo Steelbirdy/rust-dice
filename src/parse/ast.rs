@@ -1,6 +1,5 @@
 use std::convert::Infallible;
-use std::fmt;
-use std::fmt::Write;
+use std::fmt::{self, Write};
 use std::str::FromStr;
 
 pub type Int = u64;
@@ -9,31 +8,17 @@ pub type Float = f64;
 #[derive(Debug, Clone, PartialEq)]
 pub struct Expression<'a> {
     pub roll: Node<'a>,
-    pub comment: Option<&'a str>,
 }
 
 impl<'a> Expression<'a> {
-    pub(crate) fn new(roll: Node<'a>) -> Self {
-        Self {
-            roll,
-            comment: None,
-        }
-    }
-
-    pub(crate) fn new_commented(roll: Node<'a>, comment: &'a str) -> Self {
-        Self {
-            roll,
-            comment: Some(comment),
-        }
+    pub fn new(roll: Node<'a>) -> Self {
+        Self { roll }
     }
 }
 
 impl fmt::Display for Expression<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self.comment {
-            Some(comment) => write!(f, "{} {}", &self.roll, comment),
-            None => write!(f, "{}", &self.roll),
-        }
+        fmt::Display::fmt(&self.roll, f)
     }
 }
 
@@ -48,30 +33,27 @@ pub enum Node<'a> {
 }
 
 impl<'a> Node<'a> {
-    pub(crate) fn annotated(
-        expr: Node<'a>,
-        annotations: impl IntoIterator<Item = &'a str>,
-    ) -> Self {
+    pub fn new_annotated(expr: Node<'a>, annotations: Vec<&'a str>) -> Self {
         Self::Annotated(Box::new(expr), annotations.into_iter().collect())
     }
 
-    pub(crate) fn literal(x: impl Into<Literal>) -> Self {
+    pub fn new_literal(x: impl Into<Literal>) -> Self {
         Self::Literal(x.into())
     }
 
-    pub(crate) fn parenthetical(expr: Node<'a>) -> Self {
+    pub fn new_parenthetical(expr: Node<'a>) -> Self {
         Self::Parenthetical(Box::new(expr))
     }
 
-    pub(crate) fn unary(op: UnaryOperator, right: Node<'a>) -> Self {
+    pub fn new_unary(op: UnaryOperator, right: Node<'a>) -> Self {
         Self::Unary(op, Box::new(right))
     }
 
-    pub(crate) fn binary(op: BinaryOperator, left: Node<'a>, right: Node<'a>) -> Self {
+    pub fn new_binary(op: BinaryOperator, left: Node<'a>, right: Node<'a>) -> Self {
         Self::Binary(op, Box::new(left), Box::new(right))
     }
 
-    pub(crate) fn set(set: impl Into<Set<'a>>, ops: impl IntoIterator<Item = SetOperator>) -> Self {
+    pub fn new_set(set: impl Into<Set<'a>>, ops: Vec<SetOperator>) -> Self {
         Self::Set(OperatedSet::new(set, ops))
     }
 }
@@ -134,7 +116,7 @@ pub struct OperatedSet<'a> {
 }
 
 impl<'a> OperatedSet<'a> {
-    pub(crate) fn new(set: impl Into<Set<'a>>, ops: impl IntoIterator<Item = SetOperator>) -> Self {
+    pub fn new(set: impl Into<Set<'a>>, ops: Vec<SetOperator>) -> Self {
         let mut ret = Self {
             set: set.into(),
             ops: ops.into_iter().collect(),
@@ -213,7 +195,7 @@ pub struct Dice {
 }
 
 impl Dice {
-    pub(crate) fn new(num: Int, size: impl Into<DiceSize>) -> Self {
+    pub fn new(num: Int, size: impl Into<DiceSize>) -> Self {
         Self {
             num,
             size: size.into(),
@@ -355,14 +337,14 @@ pub struct SetOperator {
 }
 
 impl SetOperator {
-    pub(crate) fn new(kind: SetOperatorKind, sels: impl IntoIterator<Item = SetSelector>) -> Self {
+    pub fn new(kind: SetOperatorKind, sels: impl IntoIterator<Item = SetSelector>) -> Self {
         Self {
             kind,
             sels: sels.into_iter().collect(),
         }
     }
 
-    pub fn add_sels(&mut self, sels: impl IntoIterator<Item = SetSelector>) {
+    pub fn add_sels(&mut self, sels: Vec<SetSelector>) {
         self.sels.extend(sels);
     }
 }
@@ -391,9 +373,9 @@ pub enum SetOperatorKind {
 }
 
 impl SetOperatorKind {
-    pub(crate) const IMMEDIATE: &'static [SetOperatorKind] = &[Self::Minimum, Self::Maximum];
+    pub const IMMEDIATE: &'static [SetOperatorKind] = &[Self::Minimum, Self::Maximum];
 
-    pub(crate) fn to_str(self) -> &'static str {
+    pub fn to_str(self) -> &'static str {
         match self {
             Self::Keep => "k",
             Self::Drop => "p",

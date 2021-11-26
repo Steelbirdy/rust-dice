@@ -1,6 +1,6 @@
-pub(crate) type Lexer<'a> = logos_iter::PeekableLexer<'a, logos::Lexer<'a, TokenKind>, TokenKind>;
+pub type Lexer<'a> = logos_iter::PeekableLexer<'a, logos::Lexer<'a, TokenKind>, TokenKind>;
 
-pub(crate) fn lexer(s: &str) -> Lexer {
+pub fn lexer(s: &str) -> Lexer {
     logos_iter::LogosIter::peekable_lexer(<TokenKind as logos::Logos>::lexer(s))
 }
 
@@ -69,8 +69,6 @@ pub enum TokenKind {
     #[token("h")]
     SelHighest,
 
-    // #[regex(".+", priority = 0)]
-    // Comment,
     #[regex(r"\[[^\]]+\]")]
     Annotation,
 
@@ -86,7 +84,7 @@ pub enum TokenKind {
 }
 
 impl TokenKind {
-    pub(crate) fn to_str(self) -> &'static str {
+    pub fn to_str(self) -> &'static str {
         use TokenKind::*;
 
         match self {

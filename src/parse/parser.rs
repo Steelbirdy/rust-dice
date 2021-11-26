@@ -1,8 +1,4 @@
-use crate::ast::{Float, Int, SetOperatorKind};
-use crate::{
-    ast::{Dice, Expression, Node, Set, SetOperator, SetSelector},
-    lexer::{lexer, Lexer, TokenKind},
-};
+use super::{ast::*, lexer::*};
 use logos_iter::LogosIter;
 use std::fmt;
 use std::ops::Range;
@@ -76,7 +72,7 @@ fn fmt_expected(expected: &[TokenKind], f: &mut fmt::Formatter<'_>) -> fmt::Resu
         for exp in &expected[..len - 1] {
             write!(f, "{}, ", exp.to_str())?;
         }
-        write!(f, "and {}", expected[len - 1].to_str())
+        write!(f, "or {}", expected[len - 1].to_str())
     }
 }
 
@@ -196,13 +192,7 @@ impl<'a> Parser<'a> {
 
     fn parse_expression(&mut self) -> PResult<'a, Expression<'a>> {
         let roll = self.parse_node()?;
-
-        let comment = self.lexer.remainder().trim();
-        Ok(if comment.is_empty() {
-            Expression::new(roll)
-        } else {
-            Expression::new_commented(roll, comment)
-        })
+        Ok(Expression::new(roll))
     }
 
     fn parse_node(&mut self) -> PResult<'a> {
@@ -216,7 +206,7 @@ impl<'a> Parser<'a> {
             let op = self.advance_as().unwrap();
             let rhs = self.parse_comparison()?;
 
-            lhs = Node::binary(op, lhs, rhs)
+            lhs = Node::new_binary(op, lhs, rhs)
         }
 
         Ok(lhs)
@@ -229,7 +219,7 @@ impl<'a> Parser<'a> {
             let op = self.advance_as().unwrap();
             let rhs = self.parse_addition()?;
 
-            lhs = Node::binary(op, lhs, rhs);
+            lhs = Node::new_binary(op, lhs, rhs);
         }
 
         Ok(lhs)
@@ -242,7 +232,7 @@ impl<'a> Parser<'a> {
             let op = self.advance_as().unwrap();
             let rhs = self.parse_multiplication()?;
 
-            lhs = Node::binary(op, lhs, rhs);
+            lhs = Node::new_binary(op, lhs, rhs);
         }
 
         Ok(lhs)
@@ -253,7 +243,7 @@ impl<'a> Parser<'a> {
             let op = self.advance_as().unwrap();
             let rhs = self.parse_unary_prefix()?;
 
-            Ok(Node::unary(op, rhs))
+            Ok(Node::new_unary(op, rhs))
         } else {
             self.parse_atom()
         }
@@ -280,7 +270,7 @@ impl<'a> Parser<'a> {
         Ok(if annotations.is_empty() {
             atom
         } else {
-            Node::annotated(atom, annotations)
+            Node::new_annotated(atom, annotations)
         })
     }
 
@@ -301,7 +291,7 @@ impl<'a> Parser<'a> {
                 self.parse_set(Some(first_item))
             } else {
                 self.consume(TokenKind::RightParen)?;
-                Ok(Node::parenthetical(first_item))
+                Ok(Node::new_parenthetical(first_item))
             }
         }
     }
@@ -318,23 +308,23 @@ impl<'a> Parser<'a> {
         self.consume(TokenKind::RightParen)?;
 
         let ops = self.parse_set_ops()?;
-        Ok(Node::set(Set::NumberSet(items), ops))
+        Ok(Node::new_set(Set::NumberSet(items), ops))
     }
 
     fn parse_decimal(&mut self) -> PResult<'a> {
         let x = self.consume_as::<Float>(TokenKind::Decimal)?.unwrap();
-        Ok(Node::literal(x))
+        Ok(Node::new_literal(x))
     }
 
     fn parse_integer(&mut self) -> PResult<'a> {
         self.consume_as::<Int>(TokenKind::Integer)
-            .map(|x| Node::literal(x.unwrap()))
+            .map(|x| Node::new_literal(x.unwrap()))
     }
 
     fn parse_dice(&mut self) -> PResult<'a> {
         let dice = self.consume_as::<Dice>(TokenKind::Dice)?.unwrap();
         let ops = self.parse_dice_ops()?;
-        Ok(Node::set(dice, ops))
+        Ok(Node::new_set(dice, ops))
     }
 
     fn parse_set_ops(&mut self) -> PResult<Vec<SetOperator>> {
@@ -424,7 +414,6 @@ impl<'a> Parser<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ast::*;
 
     impl From<Int> for DiceSize {
         fn from(x: Int) -> Self {
@@ -434,13 +423,13 @@ mod tests {
 
     macro_rules! dice {
         ($num:literal, $size:expr $(; $($op:expr),+)?) => {
-            Node::set(Dice::new($num, $size), vec![$($($op),+)?])
+            Node::new_set(Dice::new($num, $size), vec![$($($op),+)?])
         };
     }
 
     macro_rules! set {
         ($($item:expr),* $(,)? $(; $($op:expr),+ $(,)?)?) => {
-            Node::set(Set::NumberSet(vec![$($item),*]), vec![$($($op),+)?])
+            Node::new_set(Set::NumberSet(vec![$($item),*]), vec![$($($op),+)?])
         };
     }
 
@@ -455,9 +444,9 @@ mod tests {
 
     #[test]
     fn test_parse_nums() {
-        check("32", Node::literal(32));
-        check("3.2", Node::literal(3.2));
-        check(".67", Node::literal(0.67));
+        check("32", Node::new_literal(32));
+        check("3.2", Node::new_literal(3.2));
+        check(".67", Node::new_literal(0.67));
     }
 
     #[test]
@@ -482,7 +471,11 @@ mod tests {
     fn test_parse_set() {
         check(
             "(1, 2, 3)",
-            set!(Node::literal(1), Node::literal(2), Node::literal(3)),
+            set!(
+                Node::new_literal(1),
+                Node::new_literal(2),
+                Node::new_literal(3)
+            ),
         );
         check(
             "(3d4, 1d12, 2d6)",
@@ -496,23 +489,26 @@ mod tests {
 
     #[test]
     fn test_parse_unary() {
-        check("-2", Node::unary(UnaryOperator::Minus, Node::literal(2)));
+        check(
+            "-2",
+            Node::new_unary(UnaryOperator::Minus, Node::new_literal(2)),
+        );
         check(
             "-2.0",
-            Node::unary(UnaryOperator::Minus, Node::literal(2.0)),
+            Node::new_unary(UnaryOperator::Minus, Node::new_literal(2.0)),
         );
-        check("-1d20", Node::unary(UnaryOperator::Minus, dice!(1, 20)));
+        check("-1d20", Node::new_unary(UnaryOperator::Minus, dice!(1, 20)));
         check(
             "- -- - -2d4",
-            Node::unary(
+            Node::new_unary(
                 UnaryOperator::Minus,
-                Node::unary(
+                Node::new_unary(
                     UnaryOperator::Minus,
-                    Node::unary(
+                    Node::new_unary(
                         UnaryOperator::Minus,
-                        Node::unary(
+                        Node::new_unary(
                             UnaryOperator::Minus,
-                            Node::unary(UnaryOperator::Minus, dice!(2, 4)),
+                            Node::new_unary(UnaryOperator::Minus, dice!(2, 4)),
                         ),
                     ),
                 ),
@@ -524,83 +520,59 @@ mod tests {
     fn test_parse_binary() {
         check(
             "2 + 2",
-            Node::binary(BinaryOperator::Add, Node::literal(2), Node::literal(2)),
+            Node::new_binary(
+                BinaryOperator::Add,
+                Node::new_literal(2),
+                Node::new_literal(2),
+            ),
         );
         check(
             "2.5 // 1",
-            Node::binary(
+            Node::new_binary(
                 BinaryOperator::FloorDiv,
-                Node::literal(2.5),
-                Node::literal(1),
+                Node::new_literal(2.5),
+                Node::new_literal(1),
             ),
         );
         check(
             "1 + 2 * 3",
-            Node::binary(
+            Node::new_binary(
                 BinaryOperator::Add,
-                Node::literal(1),
-                Node::binary(BinaryOperator::Mul, Node::literal(2), Node::literal(3)),
+                Node::new_literal(1),
+                Node::new_binary(
+                    BinaryOperator::Mul,
+                    Node::new_literal(2),
+                    Node::new_literal(3),
+                ),
             ),
         );
         check(
             "(3d2 - 2d3) % 2 == 0",
-            Node::binary(
+            Node::new_binary(
                 BinaryOperator::Eq,
-                Node::binary(
+                Node::new_binary(
                     BinaryOperator::Mod,
-                    Node::parenthetical(Node::binary(
+                    Node::new_parenthetical(Node::new_binary(
                         BinaryOperator::Sub,
                         dice!(3, 2),
                         dice!(2, 3),
                     )),
-                    Node::literal(2),
+                    Node::new_literal(2),
                 ),
-                Node::literal(0),
+                Node::new_literal(0),
             ),
         );
     }
 
     #[test]
     fn test_parse_annotations() {
-        check("1d20 [d20]", Node::annotated(dice!(1, 20), vec!["d20"]));
+        check("1d20 [d20]", Node::new_annotated(dice!(1, 20), vec!["d20"]));
         check(
             "2d20kh1 [Adv.] [d20]",
-            Node::annotated(
+            Node::new_annotated(
                 dice!(2, 20; SetOperator::new(SetOperatorKind::Keep, Some(SetSelector::Highest(1)))),
                 vec!["Adv.", "d20"],
             ),
-        );
-    }
-    #[test]
-    fn test_parse_commented() {
-        let parsed = Parser::new("2d6 [piercing] + 1d10 [cold] Ice Knife")
-            .parse()
-            .unwrap();
-        assert_eq!(
-            parsed,
-            Expression {
-                roll: Node::binary(
-                    BinaryOperator::Add,
-                    Node::annotated(dice!(2, 6), vec!["piercing"]),
-                    Node::annotated(dice!(1, 10), vec!["cold"]),
-                ),
-                comment: Some("Ice Knife"),
-            }
-        );
-
-        let parsed = Parser::new("2d6 [piercing] + 1d10 [cold] ")
-            .parse()
-            .unwrap();
-        assert_eq!(
-            parsed,
-            Expression {
-                roll: Node::binary(
-                    BinaryOperator::Add,
-                    Node::annotated(dice!(2, 6), vec!["piercing"]),
-                    Node::annotated(dice!(1, 10), vec!["cold"]),
-                ),
-                comment: None,
-            }
         );
     }
 
