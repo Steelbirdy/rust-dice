@@ -1,18 +1,24 @@
-pub type Lexer<'a> = logos_iter::PeekableLexer<'a, logos::Lexer<'a, TokenKind>, TokenKind>;
+use super::ast::Dice;
+use crate::common::*;
+use logos::{Lexer as LogosLexer, Logos};
+use logos_iter::{LogosIter, PeekableLexer};
+use std::fmt;
+
+pub type Lexer<'a> = PeekableLexer<'a, LogosLexer<'a, TokenKind>, TokenKind>;
 
 pub fn lexer(s: &str) -> Lexer {
-    logos_iter::LogosIter::peekable_lexer(<TokenKind as logos::Logos>::lexer(s))
+    TokenKind::lexer(s).peekable_lexer()
 }
 
-#[derive(logos::Logos, Debug, Copy, Clone, Eq, PartialEq)]
+#[derive(Logos, Debug, Copy, Clone, PartialEq)]
 pub enum TokenKind {
-    #[regex(r"[0-9]+")]
-    Integer,
-    #[regex(r"([0-9]+\.[0-9]*)|(\.[0-9]+)")]
-    Decimal,
+    #[regex(r"[0-9]+", |lex| lex.slice().parse())]
+    Integer(Int),
+    #[regex(r"([0-9]+\.[0-9]*)|(\.[0-9]+)", |lex| lex.slice().parse())]
+    Float(Float),
 
-    #[regex(r"([1-9][0-9]*)?d(%|[1-9][0-9]*)")]
-    Dice,
+    #[regex(r"([1-9][0-9]*)?d(%|[1-9][0-9]*)", |lex| parse_dice(lex.slice()))]
+    Dice(Dice),
 
     #[token("(")]
     LeftParen,
@@ -47,36 +53,37 @@ pub enum TokenKind {
     GreaterThan,
 
     #[token("k")]
-    SetOpKeep,
+    Keep,
     #[token("p")]
-    SetOpDrop,
-
+    Drop,
     #[token("rr")]
-    DiceOpReroll,
+    Reroll,
     #[token("ro")]
-    DiceOpRerollOnce,
+    RerollOnce,
     #[token("ra")]
-    DiceOpRerollAdd,
+    RerollAdd,
     #[token("e")]
-    DiceOpExplode,
+    Explode,
     #[token("mi")]
-    DiceOpMinimum,
+    Minimum,
     #[token("ma")]
-    DiceOpMaximum,
+    Maximum,
 
     #[token("l")]
-    SelLowest,
+    Lowest,
     #[token("h")]
-    SelHighest,
+    Highest,
 
     #[regex(r"\[[^\]]+\]")]
     Annotation,
+    #[regex(r"#.+")]
+    Comment,
 
     #[token("[]")]
     ErrEmptyAnnotation,
-    #[regex(r"0d(%|0|-?[1-9][0-9]*)")]
-    #[regex(r"([1-9][0-9]*)d(0|-[1-9][0-9]*)")]
-    ErrBadDice,
+    #[regex(r"0d(%|[0-9]+)")]
+    #[regex(r"([1-9][0-9]*)?d0")]
+    ErrZeroDice,
 
     #[regex(r"[ \t\r\n]+", logos::skip)]
     #[error]
@@ -84,13 +91,50 @@ pub enum TokenKind {
 }
 
 impl TokenKind {
-    pub fn to_str(self) -> &'static str {
+    pub const UNARY_OPS: &'static [Self] = &[Self::Plus, Self::Minus];
+
+    pub const COMPARISON_OPS: &'static [Self] = &[
+        Self::LessThan,
+        Self::GreaterThan,
+        Self::LessEqual,
+        Self::GreaterEqual,
+        Self::EqualEqual,
+        Self::BangEqual,
+    ];
+
+    pub const ADDITION_OPS: &'static [Self] = &[Self::Plus, Self::Minus];
+
+    pub const MULTIPLICATION_OPS: &'static [Self] =
+        &[Self::Star, Self::Slash, Self::SlashSlash, Self::Percent];
+
+    pub const SET_OPERATORS: &'static [Self] = &[Self::Keep, Self::Drop];
+
+    pub const DICE_OPERATORS: &'static [Self] = &[
+        Self::Keep,
+        Self::Drop,
+        Self::Reroll,
+        Self::RerollOnce,
+        Self::RerollAdd,
+        Self::Explode,
+        Self::Minimum,
+        Self::Maximum,
+    ];
+
+    pub const SELECTORS: &'static [Self] = &[
+        Self::Highest,
+        Self::Lowest,
+        Self::LessThan,
+        Self::GreaterThan,
+        // EqualTo is represented by the empty string
+    ];
+
+    pub fn as_str(&self) -> &'static str {
         use TokenKind::*;
 
         match self {
-            Integer => "<integer>",
-            Decimal => "<decimal>",
-            Dice => "<dice>",
+            Integer(_) => "<integer>",
+            Float(_) => "<float>",
+            Dice(_) => "<dice>",
             LeftParen => "'('",
             RightParen => "')'",
             Comma => "','",
@@ -106,18 +150,65 @@ impl TokenKind {
             BangEqual => "'!='",
             LessThan => "'<'",
             GreaterThan => "'>'",
-            SetOpKeep => "'k'",
-            SetOpDrop => "'p'",
-            DiceOpReroll => "'rr'",
-            DiceOpRerollOnce => "'ro'",
-            DiceOpExplode => "'e'",
-            DiceOpRerollAdd => "'ra'",
-            DiceOpMinimum => "'mi'",
-            DiceOpMaximum => "'ma'",
-            SelLowest => "'l'",
-            SelHighest => "'h'",
+            Keep => "'k'",
+            Drop => "'p'",
+            Reroll => "'rr'",
+            RerollOnce => "'ro'",
+            RerollAdd => "'ra'",
+            Explode => "'e'",
+            Minimum => "'mi'",
+            Maximum => "'ma'",
+            Highest => "'h'",
+            Lowest => "'l'",
             Annotation => "<annotation>",
-            _ => "<error>",
+            Comment => "<comment>",
+            ErrEmptyAnnotation | ErrZeroDice | Error => "<error>",
         }
     }
+
+    pub fn as_unary_op(&self) -> Option<UnaryOperator> {
+        use UnaryOperator::*;
+        Some(match self {
+            Self::Plus => Pos,
+            Self::Minus => Neg,
+            _ => return None,
+        })
+    }
+
+    pub fn as_binary_op(&self) -> Option<BinaryOperator> {
+        use BinaryOperator::*;
+        Some(match self {
+            Self::Plus => Add,
+            Self::Minus => Sub,
+            Self::Star => Mul,
+            Self::Slash => Div,
+            Self::SlashSlash => Flr,
+            Self::Percent => Rem,
+            Self::LessThan => Lt,
+            Self::GreaterThan => Gt,
+            Self::LessEqual => Le,
+            Self::GreaterEqual => Ge,
+            Self::EqualEqual => Eq,
+            Self::BangEqual => Ne,
+            _ => return None,
+        })
+    }
+}
+
+impl fmt::Display for TokenKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+// `unwrap` can be used because logos has verified that the string is a valid dice literal
+fn parse_dice(s: &str) -> Dice {
+    let (num, sides) = s.split_once('d').unwrap();
+    let num = if num.is_empty() {
+        Num::new(1).unwrap()
+    } else {
+        num.parse().unwrap()
+    };
+    let sides = sides.parse().unwrap();
+    Dice::new(num, sides)
 }

@@ -1,9 +1,8 @@
-pub mod ast;
+pub(crate) mod ast;
+mod error;
 mod lexer;
 mod parser;
+pub(crate) mod visit;
 
-pub(crate) use parser::ParseError;
-
-pub(crate) fn parse(s: &str) -> Result<ast::Expression, ParseError> {
-    parser::Parser::new(s).parse()
-}
+pub use error::ParseError;
+pub use parser::parse;

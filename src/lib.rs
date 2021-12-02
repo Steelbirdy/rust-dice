@@ -1,27 +1,29 @@
-pub mod dice;
-pub mod error;
-pub mod expr;
-pub mod parse;
-pub mod stringifiers;
+#![feature(generic_associated_types)]
 
-pub fn roll(s: &str) -> Result<dice::RollResult> {
-    let mut roller = dice::Roller::new(Default::default(), rand::thread_rng());
-    roller.roll(s)
+mod common;
+mod parse;
+mod roll;
+
+use error::Error;
+use roll::Roll;
+
+pub mod error {
+    use super::{parse::ParseError, roll::RollError};
+
+    #[derive(thiserror::Error, Debug, PartialEq)]
+    pub enum Error {
+        #[error(transparent)]
+        ParseError(#[from] ParseError),
+        #[error(transparent)]
+        RollError(#[from] RollError),
+    }
 }
 
-type Result<T> = std::result::Result<T, error::RollError>;
+pub use parse::parse;
+pub use roll::{eval, RollContext, Roller};
 
-pub(crate) type DefaultRng = rand::prelude::ThreadRng;
-
-#[cfg(test)]
-pub(crate) mod test_utils {
-    use super::*;
-    use rand::SeedableRng;
-
-    pub const SEED: u64 = 10353;
-
-    pub fn roller() -> dice::Roller<impl rand::Rng> {
-        let rng = rand_pcg::Pcg64::seed_from_u64(SEED);
-        dice::Roller::new(Default::default(), rng)
-    }
+pub fn roll(s: &str) -> Result<Roll, Error> {
+    let ast = parse(s)?;
+    let mut ctx = RollContext::default();
+    ctx.eval(ast).map_err(Into::into)
 }

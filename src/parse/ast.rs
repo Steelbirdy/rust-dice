@@ -1,140 +1,56 @@
-use std::convert::Infallible;
-use std::fmt::{self, Write};
-use std::str::FromStr;
-
-pub type Int = u64;
-pub type Float = f64;
+use crate::common::*;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Expression<'a> {
-    pub roll: Node<'a>,
+    pub(crate) roll: Node<'a>,
+    pub(crate) comment: Option<&'a str>,
 }
 
 impl<'a> Expression<'a> {
-    pub fn new(roll: Node<'a>) -> Self {
-        Self { roll }
-    }
-}
-
-impl fmt::Display for Expression<'_> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        fmt::Display::fmt(&self.roll, f)
+    pub(crate) fn new(roll: Node<'a>, comment: Option<&'a str>) -> Self {
+        Self { roll, comment }
     }
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Node<'a> {
     Annotated(Box<Node<'a>>, Vec<&'a str>),
-    Literal(Literal),
+    LiteralInt(Int),
+    LiteralFloat(Float),
+    Set(Set<'a>),
+    Dice(OperatedDice),
     Parenthetical(Box<Node<'a>>),
     Unary(UnaryOperator, Box<Node<'a>>),
-    Binary(BinaryOperator, Box<Node<'a>>, Box<Node<'a>>),
-    Set(OperatedSet<'a>),
-}
-
-impl<'a> Node<'a> {
-    pub fn new_annotated(expr: Node<'a>, annotations: Vec<&'a str>) -> Self {
-        Self::Annotated(Box::new(expr), annotations.into_iter().collect())
-    }
-
-    pub fn new_literal(x: impl Into<Literal>) -> Self {
-        Self::Literal(x.into())
-    }
-
-    pub fn new_parenthetical(expr: Node<'a>) -> Self {
-        Self::Parenthetical(Box::new(expr))
-    }
-
-    pub fn new_unary(op: UnaryOperator, right: Node<'a>) -> Self {
-        Self::Unary(op, Box::new(right))
-    }
-
-    pub fn new_binary(op: BinaryOperator, left: Node<'a>, right: Node<'a>) -> Self {
-        Self::Binary(op, Box::new(left), Box::new(right))
-    }
-
-    pub fn new_set(set: impl Into<Set<'a>>, ops: Vec<SetOperator>) -> Self {
-        Self::Set(OperatedSet::new(set, ops))
-    }
-}
-
-impl fmt::Display for Node<'_> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Annotated(value, annotations) => {
-                fmt::Display::fmt(&*value, f)?;
-
-                if !annotations.is_empty() {
-                    f.write_char(' ')?;
-                    for annot in annotations {
-                        write!(f, "[{}]", annot)?;
-                    }
-                }
-
-                Ok(())
-            }
-            Self::Literal(x) => fmt::Display::fmt(x, f),
-            Self::Parenthetical(x) => write!(f, "({})", &*x),
-            Self::Unary(op, right) => write!(f, "{}{}", op, &*right),
-            Self::Binary(op, left, right) => write!(f, "{} {} {}", &*left, op, &*right),
-            Self::Set(set) => fmt::Display::fmt(set, f),
-        }
-    }
-}
-
-#[derive(Debug, Copy, Clone, PartialEq)]
-pub enum Literal {
-    Int(Int),
-    Float(Float),
-}
-
-impl From<Int> for Literal {
-    fn from(x: Int) -> Self {
-        Literal::Int(x)
-    }
-}
-
-impl From<Float> for Literal {
-    fn from(x: Float) -> Self {
-        Literal::Float(x)
-    }
-}
-
-impl fmt::Display for Literal {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Int(x) => fmt::Display::fmt(x, f),
-            Self::Float(x) => fmt::Display::fmt(x, f),
-        }
-    }
+    Binary(Box<Node<'a>>, BinaryOperator, Box<Node<'a>>),
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct OperatedSet<'a> {
-    pub set: Set<'a>,
+pub struct Set<'a> {
+    pub values: Vec<Node<'a>>,
     pub ops: Vec<SetOperator>,
 }
 
-impl<'a> OperatedSet<'a> {
-    pub fn new(set: impl Into<Set<'a>>, ops: Vec<SetOperator>) -> Self {
-        let mut ret = Self {
-            set: set.into(),
-            ops: ops.into_iter().collect(),
-        };
-        ret.simplify_operations();
+impl<'a> Set<'a> {
+    pub fn new(values: Vec<Node<'a>>, ops: Vec<SetOperator>) -> Self {
+        let mut ret = Self { values, ops };
+        ret.simplify_ops();
         ret
     }
 
-    fn simplify_operations(&mut self) {
+    fn simplify_ops(&mut self) {
+        if self.ops.is_empty() {
+            return;
+        }
+
         let mut new_ops = Vec::with_capacity(self.ops.len());
 
         for op in self.ops.drain(..) {
-            if new_ops.is_empty() || SetOperatorKind::IMMEDIATE.contains(&op.kind) {
+            if new_ops.is_empty() {
                 new_ops.push(op);
             } else {
                 let last_op = new_ops.last_mut().expect("new_ops is not empty");
-                if op.kind == last_op.kind {
-                    last_op.add_sels(op.sels);
+                if op.kind() == last_op.kind() {
+                    last_op.add_sels(&mut op.into_sels().into_vec());
                 } else {
                     new_ops.push(op);
                 }
@@ -146,272 +62,59 @@ impl<'a> OperatedSet<'a> {
     }
 }
 
-impl fmt::Display for OperatedSet<'_> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        fmt::Display::fmt(&self.set, f)?;
-        for op in &self.ops {
-            fmt::Display::fmt(op, f)?;
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub struct OperatedDice {
+    pub num: Num,
+    pub sides: Sides,
+    pub ops: Vec<DiceOperator>,
+}
+
+impl OperatedDice {
+    pub fn new(num: Num, sides: Sides, ops: Vec<DiceOperator>) -> Self {
+        let mut ret = Self { num, sides, ops };
+        ret.simplify_ops();
+        ret
+    }
+
+    fn simplify_ops(&mut self) {
+        if self.ops.is_empty() {
+            return;
         }
 
-        Ok(())
-    }
-}
+        let mut new_ops = Vec::with_capacity(self.ops.len());
 
-#[derive(Debug, Clone, PartialEq)]
-pub enum Set<'a> {
-    NumberSet(Vec<Node<'a>>),
-    Dice(Dice),
-}
-
-impl From<Dice> for Set<'_> {
-    fn from(dice: Dice) -> Self {
-        Set::Dice(dice)
-    }
-}
-
-impl fmt::Display for Set<'_> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::NumberSet(items) => {
-                f.write_char('(')?;
-                for item in &items[..items.len() - 1] {
-                    write!(f, "{}, ", item)?;
-                }
-                if items.len() == 1 {
-                    write!(f, "{},)", &items[0])
+        for op in self.ops.drain(..) {
+            if new_ops.is_empty() || op.is_immediate() {
+                new_ops.push(op);
+            } else {
+                let last_op = new_ops.last_mut().expect("new_ops is not empty");
+                if op.kind() == last_op.kind() {
+                    if let Some(sels) = op.into_sels() {
+                        last_op.add_sels(&mut sels.into_vec());
+                    }
                 } else {
-                    write!(f, "{})", &items[items.len() - 1])
+                    new_ops.push(op);
                 }
             }
-            Self::Dice(x) => fmt::Display::fmt(x, f),
         }
+
+        new_ops.shrink_to_fit();
+        self.ops = new_ops;
     }
 }
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
 pub struct Dice {
-    pub num: Int,
-    pub size: DiceSize,
+    pub num: Num,
+    pub sides: Sides,
 }
 
 impl Dice {
-    pub fn new(num: Int, size: impl Into<DiceSize>) -> Self {
-        Self {
-            num,
-            size: size.into(),
-        }
-    }
-}
-
-impl FromStr for Dice {
-    type Err = Infallible;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let (num, size) = s.split_once('d').unwrap();
-        let num = if num.is_empty() {
-            1
-        } else {
-            num.parse().unwrap()
-        };
-        let size = if size == "%" {
-            DiceSize::Percentile
-        } else {
-            DiceSize::Int(size.parse().unwrap())
-        };
-
-        Ok(Dice::new(num, size))
-    }
-}
-
-impl fmt::Display for Dice {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}d{}", &self.num, &self.size)
-    }
-}
-
-#[derive(Debug, Copy, Clone, Eq, PartialEq)]
-pub enum DiceSize {
-    Int(Int),
-    Percentile,
-}
-
-impl fmt::Display for DiceSize {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Int(x) => fmt::Display::fmt(x, f),
-            Self::Percentile => f.write_char('%'),
-        }
-    }
-}
-
-#[derive(Debug, Copy, Clone, Eq, PartialEq)]
-pub enum BinaryOperator {
-    Add,
-    Sub,
-    Mul,
-    Div,
-    FloorDiv,
-    Mod,
-    Lt,
-    Gt,
-    Leq,
-    Geq,
-    Eq,
-    Neq,
-}
-
-impl fmt::Display for BinaryOperator {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let s = match self {
-            Self::Add => "+",
-            Self::Sub => "-",
-            Self::Mul => "*",
-            Self::Div => "/",
-            Self::FloorDiv => "//",
-            Self::Mod => "%",
-            Self::Lt => "<",
-            Self::Gt => ">",
-            Self::Leq => "<=",
-            Self::Geq => ">=",
-            Self::Eq => "==",
-            Self::Neq => "!=",
-        };
-        f.write_str(s)
-    }
-}
-
-impl FromStr for BinaryOperator {
-    type Err = Infallible;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        Ok(match s {
-            "+" => Self::Add,
-            "-" => Self::Sub,
-            "*" => Self::Mul,
-            "/" => Self::Div,
-            "//" => Self::FloorDiv,
-            "%" => Self::Mod,
-            "<" => Self::Lt,
-            ">" => Self::Gt,
-            "<=" => Self::Leq,
-            ">=" => Self::Geq,
-            "==" => Self::Eq,
-            "!=" => Self::Neq,
-            _ => unreachable!(),
-        })
-    }
-}
-
-#[derive(Debug, Copy, Clone, Eq, PartialEq)]
-pub enum UnaryOperator {
-    Plus,
-    Minus,
-}
-
-impl fmt::Display for UnaryOperator {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let s = match self {
-            Self::Plus => "+",
-            Self::Minus => "-",
-        };
-        f.write_str(s)
-    }
-}
-
-impl FromStr for UnaryOperator {
-    type Err = Infallible;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        Ok(match s {
-            "+" => Self::Plus,
-            "-" => Self::Minus,
-            _ => unreachable!(),
-        })
-    }
-}
-
-#[derive(Debug, Clone, Eq, PartialEq)]
-pub struct SetOperator {
-    pub kind: SetOperatorKind,
-    pub sels: Vec<SetSelector>,
-}
-
-impl SetOperator {
-    pub fn new(kind: SetOperatorKind, sels: impl IntoIterator<Item = SetSelector>) -> Self {
-        Self {
-            kind,
-            sels: sels.into_iter().collect(),
-        }
+    pub fn new(num: Num, sides: Sides) -> Self {
+        Self { num, sides }
     }
 
-    pub fn add_sels(&mut self, sels: Vec<SetSelector>) {
-        self.sels.extend(sels);
-    }
-}
-
-impl fmt::Display for SetOperator {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.kind.to_str())?;
-        for sel in &self.sels {
-            fmt::Display::fmt(sel, f)?;
-        }
-
-        Ok(())
-    }
-}
-
-#[derive(Debug, Copy, Clone, Eq, PartialEq)]
-pub enum SetOperatorKind {
-    Keep,
-    Drop,
-    Reroll,
-    RerollOnce,
-    Explode,
-    ExplodeOnce,
-    Minimum,
-    Maximum,
-}
-
-impl SetOperatorKind {
-    pub const IMMEDIATE: &'static [SetOperatorKind] = &[Self::Minimum, Self::Maximum];
-
-    pub fn to_str(self) -> &'static str {
-        match self {
-            Self::Keep => "k",
-            Self::Drop => "p",
-            Self::Reroll => "rr",
-            Self::RerollOnce => "ro",
-            Self::Explode => "e",
-            Self::ExplodeOnce => "ra",
-            Self::Minimum => "mi",
-            Self::Maximum => "ma",
-        }
-    }
-}
-
-impl fmt::Display for SetOperatorKind {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.to_str())
-    }
-}
-
-#[derive(Debug, Copy, Clone, Eq, PartialEq)]
-pub enum SetSelector {
-    Lowest(Int),
-    Highest(Int),
-    LessThan(Int),
-    GreaterThan(Int),
-    EqualTo(Int),
-}
-
-impl fmt::Display for SetSelector {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Lowest(x) => write!(f, "l{}", x),
-            Self::Highest(x) => write!(f, "h{}", x),
-            Self::LessThan(x) => write!(f, "<{}", x),
-            Self::GreaterThan(x) => write!(f, ">{}", x),
-            Self::EqualTo(x) => write!(f, "{}", x),
-        }
+    pub fn with_ops(self, ops: Vec<DiceOperator>) -> OperatedDice {
+        OperatedDice::new(self.num, self.sides, ops)
     }
 }
