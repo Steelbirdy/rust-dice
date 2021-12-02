@@ -231,9 +231,10 @@ impl Dice {
     }
 
     pub fn roll_more<R: Roller>(&mut self, ctx: &mut RollContext<R>, num: usize) -> RResult<()> {
-        self.values.extend(ctx
-            .roll(num, self.sides)?
-            .map(|x| Die::new(self.sides, x.get() as Int)));
+        self.values.extend(
+            ctx.roll(num, self.sides)?
+                .map(|x| Die::new(self.sides, x.get() as Int)),
+        );
         Ok(())
     }
 }

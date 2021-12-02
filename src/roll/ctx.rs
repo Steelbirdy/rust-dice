@@ -14,20 +14,20 @@ pub struct RollContext<R = DefaultRoller> {
 }
 
 impl<R: Roller> RollContext<R> {
-    pub fn new(max_rolls: Option<usize>, roller: R) -> Self {
+    pub fn new(max_rolls: usize, roller: R) -> Self {
         Self {
-            max_rolls,
+            max_rolls: Some(max_rolls),
             rolls: 0,
             roller,
         }
     }
 
-    pub fn new_bounded(max_rolls: usize, roller: R) -> Self {
-        Self::new(Some(max_rolls), roller)
-    }
-
-    pub fn new_unbounded(roller: R) -> Self {
-        Self::new(None, roller)
+    pub fn new_unlimited(roller: R) -> Self {
+        Self {
+            max_rolls: None,
+            rolls: 0,
+            roller,
+        }
     }
 
     fn count_rolls(&mut self, n: usize) -> RResult<()> {
@@ -74,7 +74,7 @@ impl<R: Roller> RollContext<R> {
 
 impl Default for RollContext {
     fn default() -> Self {
-        Self::new(Some(1000), rand::thread_rng())
+        Self::new(1000, rand::thread_rng())
     }
 }
 
@@ -153,14 +153,14 @@ mod tests {
     }
 
     fn check(s: &str, expected: impl Into<Number>) {
-        let mut ctx = RollContext::new_bounded(1000, mock_roller());
+        let mut ctx = RollContext::new(1000, mock_roller());
         let ast = crate::parse::parse(s).unwrap();
         let actual = ctx.eval(ast).unwrap();
         assert_eq!(expected.into(), actual.total().unwrap());
     }
 
     fn check_err(s: &str, expected: RollError) {
-        let mut ctx = RollContext::new_bounded(1000, mock_roller());
+        let mut ctx = RollContext::new(1000, mock_roller());
         let ast = crate::parse::parse(s).unwrap();
         let actual = ctx.eval(ast);
         assert_eq!(expected, actual.unwrap_err());

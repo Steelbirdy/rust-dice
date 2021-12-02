@@ -1,5 +1,5 @@
-use super::tree::*;
 use super::num::Number;
+use super::tree::*;
 
 pub trait VisitRoll {
     type Output;

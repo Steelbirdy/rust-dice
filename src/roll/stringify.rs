@@ -1,8 +1,8 @@
+use super::visit::{AcceptRoll, VisitRoll};
 use crate::common::{DiceOperator, Int, SetOperator, Sides};
 use crate::roll::num::Number;
-use crate::roll::{Roll, RResult};
 use crate::roll::tree::{Binary, Dice, Die, Eval, Grouping, Literal, RollTree, Set, Unary};
-use super::visit::{VisitRoll, AcceptRoll};
+use crate::roll::{RResult, Roll};
 
 pub trait Stringify {
     fn stringify<A: AcceptRoll>(&mut self, a: &A) -> RResult<String> {
@@ -20,7 +20,9 @@ pub trait Stringify {
         Ok(if tree.annotations.is_empty() {
             roll
         } else {
-            let annotations = tree.annotations.iter()
+            let annotations = tree
+                .annotations
+                .iter()
                 .map(|s| format!("[{}]", s))
                 .collect::<Vec<_>>()
                 .join(" ");
@@ -29,7 +31,9 @@ pub trait Stringify {
     }
 
     fn str_literal<T: Copy + Into<Number>>(&mut self, lit: &Literal<T>) -> RResult<String> {
-        let mut ret = lit.values.iter()
+        let mut ret = lit
+            .values
+            .iter()
             .copied()
             .map(|x| x.into().to_string())
             .collect::<Vec<_>>()
@@ -41,10 +45,9 @@ pub trait Stringify {
     }
 
     fn str_set(&mut self, set: &Set<'_>) -> RResult<String> {
-        let mut ret = set.values.iter()
-            .try_fold(String::from("("), |a, b| {
-                self.stringify(b).map(|b| format!("{}{}, ", a, b))
-            })?;
+        let mut ret = set.values.iter().try_fold(String::from("("), |a, b| {
+            self.stringify(b).map(|b| format!("{}{}, ", a, b))
+        })?;
 
         let len = set.values.len();
         if len == 1 {
@@ -62,16 +65,22 @@ pub trait Stringify {
     }
 
     fn str_dice(&mut self, dice: &Dice) -> RResult<String> {
-        let the_dice = dice.values.iter()
+        let the_dice = dice
+            .values
+            .iter()
             .map(|die| self.stringify(die))
             .collect::<RResult<Vec<_>>>()?
             .join(", ");
         let the_ops = self.str_dice_ops(&dice.ops)?;
-        Ok(format!("{}d{}{} ({})", dice.num, dice.sides, the_ops, the_dice))
+        Ok(format!(
+            "{}d{}{} ({})",
+            dice.num, dice.sides, the_ops, the_dice
+        ))
     }
 
     fn str_die(&mut self, die: &Die) -> RResult<String> {
-        die.values.iter()
+        die.values
+            .iter()
             .map(|v| self.stringify(v))
             .collect::<RResult<Vec<_>>>()
             .map(|s| s.join(", "))
@@ -138,12 +147,18 @@ impl MarkdownStringifier {
 
     fn fmt_die_value(&mut self, v: &Literal<Int>, sides: Sides) -> RResult<String> {
         let number = v.number()?;
-        let bold_last = number == Number::Int(1) || matches!(sides, Sides::Poly(n) if number == Number::Int(n.get() as Int));
+        let bold_last = number == Number::Int(1)
+            || matches!(sides, Sides::Poly(n) if number == Number::Int(n.get() as Int));
         self.fmt_literal(v, bold_last)
     }
 
-    fn fmt_literal<T: Copy + Into<Number>>(&mut self, lit: &Literal<T>, bold_last: bool) -> RResult<String> {
-        let mut ret: String = lit.values[..lit.values.len() - 1].iter()
+    fn fmt_literal<T: Copy + Into<Number>>(
+        &mut self,
+        lit: &Literal<T>,
+        bold_last: bool,
+    ) -> RResult<String> {
+        let mut ret: String = lit.values[..lit.values.len() - 1]
+            .iter()
             .copied()
             .map(|x| format!("{} -> ", x.into()))
             .collect();
@@ -195,7 +210,8 @@ impl Stringify for MarkdownStringifier {
 
     fn str_die(&mut self, die: &Die) -> RResult<String> {
         let sides = die.sides;
-        die.values.iter()
+        die.values
+            .iter()
             .map(|v| self.fmt_die_value(v, sides))
             .collect::<RResult<Vec<_>>>()
             .map(|s| s.join(", "))
@@ -247,16 +263,15 @@ where
 
 #[cfg(test)]
 mod tests {
-    use crate::common::NonZeroUInt;
     use super::*;
+    use crate::common::NonZeroUInt;
 
     macro_rules! check {
         ($cls:ident, $input:expr, $expected:expr) => {
             let mut str = $cls::default();
             let ast = crate::parse($input).unwrap();
             let roller = crate::roll::roller::StepRoller::new(NonZeroUInt::new(10).unwrap(), 1);
-            let roll = crate::eval(ast, roller, Some(1000))
-                .unwrap();
+            let roll = crate::eval(ast, roller, 1000).unwrap();
             let actual = $cls::stringify(&mut str, &roll).unwrap();
             assert_eq!(&actual, $expected);
         };
@@ -267,18 +282,42 @@ mod tests {
         check!(SimpleStringifier, "2 + 3", "2 + 3 = 5");
         check!(SimpleStringifier, "2d20", "2d20 (10, 11) = 21");
         check!(SimpleStringifier, "2d20kh1", "2d20kh1 (10, 11) = 11");
-        check!(SimpleStringifier, "4d4rr1 + 2d6e3 + 3", "4d4rr1 (2, 3, 4, 1, 2) + 2d6e3 (3!, 4, 5) + 3 = 26");
-        check!(SimpleStringifier, "8d6mi2mi3 + 5", "8d6mi2mi3 (4, 5, 6, 1 -> 2 -> 3, 2 -> 3, 3, 4, 5) + 5 = 38");
+        check!(
+            SimpleStringifier,
+            "4d4rr1 + 2d6e3 + 3",
+            "4d4rr1 (2, 3, 4, 1, 2) + 2d6e3 (3!, 4, 5) + 3 = 26"
+        );
+        check!(
+            SimpleStringifier,
+            "8d6mi2mi3 + 5",
+            "8d6mi2mi3 (4, 5, 6, 1 -> 2 -> 3, 2 -> 3, 3, 4, 5) + 5 = 38"
+        );
     }
 
     #[test]
     fn test_markdown_stringify() {
         check!(MarkdownStringifier, "2 + 3", "2 + 3 = `5`");
         check!(MarkdownStringifier, "2d20", "2d20 (10, 11) = `21`");
-        check!(MarkdownStringifier, "2d20kh1", "2d20kh1 (~~10~~, 11) = `11`");
-        check!(MarkdownStringifier, "4d4rr1 + 2d6e3 + 3", "4d4rr1 (2, 3, **4**, ~~**1**~~, 2) + 2d6e3 (3!, 4, 5) + 3 = `26`");
-        check!(MarkdownStringifier, "8d6mi2mi3 + 5", "8d6mi2mi3 (4, 5, **6**, 1 -> 2 -> 3, 2 -> 3, 3, 4, 5) + 5 = `38`");
-        check!(MarkdownStringifier, "1d12mi12", "1d12mi12 (10 -> **12**) = `12`");
+        check!(
+            MarkdownStringifier,
+            "2d20kh1",
+            "2d20kh1 (~~10~~, 11) = `11`"
+        );
+        check!(
+            MarkdownStringifier,
+            "4d4rr1 + 2d6e3 + 3",
+            "4d4rr1 (2, 3, **4**, ~~**1**~~, 2) + 2d6e3 (3!, 4, 5) + 3 = `26`"
+        );
+        check!(
+            MarkdownStringifier,
+            "8d6mi2mi3 + 5",
+            "8d6mi2mi3 (4, 5, **6**, 1 -> 2 -> 3, 2 -> 3, 3, 4, 5) + 5 = `38`"
+        );
+        check!(
+            MarkdownStringifier,
+            "1d12mi12",
+            "1d12mi12 (10 -> **12**) = `12`"
+        );
         check!(MarkdownStringifier, "(2d4rr<3, 1d20e20, 3d3rah1)kh1", "(~~2d4rr<3 (2, **4**, 3)~~, 1d20e20 (13), ~~3d3rah1 (2, **3!**, **1**, 2)~~)kh1 = `13`");
     }
 }
