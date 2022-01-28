@@ -19,6 +19,10 @@ pub mod error {
     }
 }
 
+pub mod fmt {
+    pub use super::roll::{MarkdownStringifier, SimpleStringifier};
+}
+
 pub use parse::parse;
 pub use roll::{eval, RollContext, Roller};
 
