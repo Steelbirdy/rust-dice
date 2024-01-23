@@ -15,10 +15,7 @@ pub trait Roller {
 }
 
 impl<R: Rng> Roller for R {
-    type RollIter<'a>
-    where
-        Self: 'a,
-    = std::iter::Take<DistIter<Uniform<UInt>, &'a mut Self, UInt>>;
+    type RollIter<'a> = std::iter::Take<DistIter<Uniform<UInt>, &'a mut Self, UInt>> where Self: 'a;
 
     fn roll(&mut self, sides: NonZeroUInt) -> UInt {
         self.gen_range(1..=sides.get())
